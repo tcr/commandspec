@@ -16,7 +16,7 @@ extern crate commandspec;
 use commandspec::CommandSpec; // .execute() method on Command
 use std::process::Command;
 
-command!(
+commandspec!(
     "
     cd path/location
     export RUST_LOG=full
