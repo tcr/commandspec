@@ -1,31 +1,39 @@
-# command-macro
+# commandspec
 
 Simple Rust macro for building `std::process::Command` objects. Uses macro_rules! and works on stable.
 
 ```toml
 [dependencies]
-command_macro = "0.1.0"
+commandspec = "0.2.0"
 ```
 
 Then:
 
 ```rust
 #[macro_use]
-extern crate command_macro;
+extern crate commandspec;
 
-use command_macro::ExecuteCommand; // .execute() trait
+use commandspec::CommandSpec; // .execute() method on Command
 use std::process::Command;
 
 command!(
-    cd: "path/location",
-    env: RUST_LOG="full",
-    env: RUST_BACKTRACE=1,
-    "cargo run {release_flag} --bin {bin_name} -- {args}",
+    "
+    cd path/location
+    export RUST_LOG=full
+    export RUST_BACKTRACE=1
+    cargo run {release_flag} --bin {bin_name} -- {args}
+    ",
     release_flag=Some("--release"),
     bin_name="binary",
     args=vec!["arg1", "arg2"],
-).execute(); // Run and exit out if error code != 0
+)?.execute()?; // () on success (error code 0), CommandError for all else
 ```
+
+### Features:
+
+* format-like invocation makes it easy to interpolate variables, with automatic quoting
+* Equivalent syntax to shell when prototyping
+* Works on stable Rust.
 
 ## License
 

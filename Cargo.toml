@@ -1,10 +1,10 @@
 [package]
 authors = ["Tim Ryan <tim@timryan.org>"]
-name = "command-macro"
-version = "0.1.0"
 description = "Simple Rust macro for building `std::process::Command` objects. Uses macro_rules! and works on stable."
-repository = "http://github.com/tcr/command-macro"
 license = "MIT OR Apache-2.0"
-
+name = "commandspec"
+repository = "http://github.com/tcr/commandspec"
+version = "0.2.0"
 [dependencies]
+failure = "0.1.1"
 shlex = "0.1.1"
