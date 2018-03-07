@@ -29,6 +29,12 @@ command!(
 )?.execute()?; // () on success (error code 0), CommandError for all else
 ```
 
+Format of the commandspec input, in order:
+
+* (optional) `cd <path>` to set the current working directory of the command, where path can be a literal, a quoted string, or format variable.
+* (optional) one or more `export <name>=<value>` lines to set environment variables, with the same formatting options.
+* Last, a command you want to invoke, optionally with format arguments.
+
 ### Features:
 
 * format-like invocation makes it easy to interpolate variables, with automatic quoting
