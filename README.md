@@ -3,6 +3,13 @@
 Simple Rust macro for building `std::process::Command` objects. Uses macro_rules! and works on stable.
 
 ```
+[dependencies]
+command_macro = "0.1.0"
+```
+
+Then:
+
+```
 #[macro_use]
 extern crate command_macro;
 
