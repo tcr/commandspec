@@ -261,7 +261,7 @@ macro_rules! shell_sh {
             format!(
                 "sh -c {}",
                 $crate::command_arg(
-                    &format!($fmt)
+                    &format!("set -e\n\n{}", format!($fmt)),
                 ),
             )
         )?.execute()
@@ -271,7 +271,7 @@ macro_rules! shell_sh {
             format!(
                 "sh -c {}",
                 $crate::command_arg(
-                    &format!($fmt)
+                    &format!("set -e\n\n{}", format!($fmt)),
                 ),
             )
         )?.execute()
@@ -281,7 +281,7 @@ macro_rules! shell_sh {
             format!(
                 "sh -c {}",
                 $crate::command_arg(
-                    &format!($fmt, $( $id = $crate::command_arg(&$value) ,)*)
+                    &format!("set -e\n\n{}", format!($fmt, $( $id = $crate::command_arg(&$value) ,)*)),
                 ),
             )
         )?.execute()
