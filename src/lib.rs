@@ -255,7 +255,7 @@ macro_rules! execute {
 }
 
 #[macro_export]
-macro_rules! shell {
+macro_rules! shell_sh {
     ($fmt:expr) => ({
         $crate::commandify(
             format!(
