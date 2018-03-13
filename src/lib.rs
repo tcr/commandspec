@@ -210,7 +210,14 @@ pub fn commandify(value: String) -> Result<Command, Error> {
         bail!("Didn't find a command in your command! macro.");
     }
 
-    let mut command = shlex::split(&command_lines.join("\n")).expect("No");
+    // Join the command string.
+    let command_string = command_lines
+        .iter()
+        .map(|line| line.trim_right_matches(r"\"))
+        .collect::<Vec<_>>()
+        .join("\n");
+
+    let mut command = shlex::split(&command_string).expect("Command string couldn't be parsed by shlex");
     let mut cmd = Command::new(command.remove(0));
     cmd.args(command);
     for (key, value) in env {
