@@ -213,12 +213,12 @@ pub fn commandify(value: String) -> Result<Command, Error> {
     // Join the command string.
     let command_string = command_lines
         .iter()
-        .map(|line| line.trim_right_matches(r"\"))
+        .map(|line| line.replace("\\\n", "\n"))
         .collect::<Vec<_>>()
         .join("\n");
 
     let mut command = shlex::split(&command_string).expect("Command string couldn't be parsed by shlex");
-    let mut cmd = Command::new(command.remove(0));
+    let mut cmd = Command::new(command.remove(0)); 
     cmd.args(command);
     for (key, value) in env {
         cmd.env(key, value);
