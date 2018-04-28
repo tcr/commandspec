@@ -1,15 +1,69 @@
 extern crate shlex;
 #[macro_use]
 extern crate failure;
+extern crate libc;
+#[macro_use]
+extern crate lazy_static;
+extern crate ctrlc;
 
 use failure::Error;
-use std::process::Command;
+use std::process::{Command, Child};
 use std::fmt;
 use std::collections::HashMap;
+use libc::{kill, SIGINT, setpgid};
+use std::os::unix::process::CommandExt;
+
+use std::collections::HashSet;
+use std::sync::Arc;
+use std::sync::Mutex;
+
+lazy_static! {
+    static ref PID_MAP: Arc<Mutex<HashSet<i32>>> = Arc::new(Mutex::new(HashSet::new()));
+}
+
+pub fn forward_ctrlc() {
+    ctrlc::set_handler(|| {
+        for pid in PID_MAP.lock().unwrap().iter() {
+            unsafe {
+                let _ = kill(-(*pid), SIGINT);
+            }
+        }
+        ::std::process::exit(130);
+    }).expect("Error setting Ctrl-C handler");
+}
 
 pub trait CommandSpec {
     fn execute(&mut self) -> Result<(), CommandError>;
+
+    fn spawn_guard(&mut self) -> Result<SpawnGuard, ::std::io::Error>;
 }
+
+pub struct SpawnGuard(pub Child);
+
+impl ::std::ops::Deref for SpawnGuard {
+    type Target = Child;
+
+    fn deref(&self) -> &Child {
+        &self.0
+    }
+}
+
+impl ::std::ops::DerefMut for SpawnGuard {
+    fn deref_mut(&mut self) -> &mut Child {
+        &mut self.0
+    }
+}
+
+impl ::std::ops::Drop for SpawnGuard {
+    fn drop(&mut self) {
+        unsafe {
+            let id = self.0.id() as i32;
+            let _ = kill(-id, SIGINT);
+            PID_MAP.lock().unwrap().remove(&id);
+        }
+    }
+}
+//---------------
 
 #[derive(Debug, Fail)]
 pub enum CommandError {
@@ -26,18 +80,38 @@ pub enum CommandError {
 impl CommandSpec for Command {
     // Executes the command, and returns a versatile error struct
     fn execute(&mut self) -> Result<(), CommandError> {
-        match self.status() {
-            Ok(status) => {
-                if status.success() {
-                    Ok(())
-                } else if let Some(code) = status.code() {
-                    Err(CommandError::Code(code))
-                } else {
-                    Err(CommandError::Interrupt)
+        match self.spawn_guard() {
+            Ok(mut child) => {
+                match child.wait() {
+                    Ok(status) => {
+                        if status.success() {
+                            Ok(())
+                        } else if let Some(code) = status.code() {
+                            Err(CommandError::Code(code))
+                        } else {
+                            Err(CommandError::Interrupt)
+                        }
+                    }
+                    Err(err) => {
+                        Err(CommandError::Io(err))
+                    }
                 }
             },
             Err(err) => Err(CommandError::Io(err)),
         }
+    }
+
+    fn spawn_guard(&mut self) -> Result<SpawnGuard, ::std::io::Error> {
+        let child = self.before_exec(|| {
+            unsafe {
+                // Become this process' own leader.
+                let _ = setpgid(0, 0);
+            }
+            Ok(())
+        }).spawn()?;
+        // TODO only add to PID_MAP if successful
+        PID_MAP.lock().unwrap().insert(child.id() as i32);
+        Ok(SpawnGuard(child))
     }
 }
 
