@@ -21,7 +21,7 @@ lazy_static! {
     static ref PID_MAP: Arc<Mutex<HashSet<i32>>> = Arc::new(Mutex::new(HashSet::new()));
 }
 
-pub fn forward_ctrlc() {
+pub fn cleanup_on_ctrlc() {
     ctrlc::set_handler(|| {
         for pid in PID_MAP.lock().unwrap().iter() {
             unsafe {
@@ -32,13 +32,15 @@ pub fn forward_ctrlc() {
     }).expect("Error setting Ctrl-C handler");
 }
 
-pub trait CommandSpec {
-    fn execute(&mut self) -> Result<(), CommandError>;
-
-    fn spawn_guard(&mut self) -> Result<SpawnGuard, ::std::io::Error>;
-}
-
 pub struct SpawnGuard(pub Child);
+
+impl SpawnGuard {
+    fn abandon(self) {
+        let id = self.0.id() as i32;
+        PID_MAP.lock().unwrap().remove(&id);
+        ::std::mem::forget(self);
+    }
+}
 
 impl ::std::ops::Deref for SpawnGuard {
     type Target = Child;
@@ -65,6 +67,12 @@ impl ::std::ops::Drop for SpawnGuard {
 }
 //---------------
 
+pub trait CommandSpecExt {
+    fn execute(&mut self) -> Result<(), CommandError>;
+
+    fn scoped_spawn(&mut self) -> Result<SpawnGuard, ::std::io::Error>;
+}
+
 #[derive(Debug, Fail)]
 pub enum CommandError {
     #[fail(display = "Encountered an IO error.")]
@@ -77,20 +85,24 @@ pub enum CommandError {
     Code(i32),
 }
 
-impl CommandSpec for Command {
+impl CommandSpecExt for Command {
     // Executes the command, and returns a versatile error struct
     fn execute(&mut self) -> Result<(), CommandError> {
-        match self.spawn_guard() {
+        match self.scoped_spawn() {
             Ok(mut child) => {
                 match child.wait() {
                     Ok(status) => {
-                        if status.success() {
+                        let ret = if status.success() {
                             Ok(())
                         } else if let Some(code) = status.code() {
                             Err(CommandError::Code(code))
                         } else {
                             Err(CommandError::Interrupt)
-                        }
+                        };
+
+                        child.abandon();
+
+                        ret
                     }
                     Err(err) => {
                         Err(CommandError::Io(err))
@@ -101,7 +113,7 @@ impl CommandSpec for Command {
         }
     }
 
-    fn spawn_guard(&mut self) -> Result<SpawnGuard, ::std::io::Error> {
+    fn scoped_spawn(&mut self) -> Result<SpawnGuard, ::std::io::Error> {
         let child = self.before_exec(|| {
             unsafe {
                 // Become this process' own leader.
@@ -109,11 +121,15 @@ impl CommandSpec for Command {
             }
             Ok(())
         }).spawn()?;
-        // TODO only add to PID_MAP if successful
+
+        // TODO only add to PID_MAP if successful at becoming a process leader
         PID_MAP.lock().unwrap().insert(child.id() as i32);
+
         Ok(SpawnGuard(child))
     }
 }
+
+//---------------
 
 pub enum CommandArg {
     Empty,
@@ -228,6 +244,33 @@ pub fn command_arg<'a, T>(value: &'a T) -> CommandArg
     CommandArg::from(value)
 }
 
+//---------------
+
+/// Represents the invocation specification used to generate a Command.
+#[derive(Debug)]
+struct CommandSpec {
+    binary: String,
+    args: Vec<String>,
+    env: HashMap<String, String>,
+    cd: Option<String>,
+}
+
+impl CommandSpec {
+    fn to_command(&self) -> Command {
+        let mut cmd = Command::new(&self.binary);
+        cmd.args(&self.args);
+        for (key, value) in &self.env {
+            cmd.env(key, value);
+        }
+        if let Some(cd) = &self.cd {
+            cmd.current_dir(cd);
+        }
+        cmd
+    }
+}
+
+//---------------
+
 pub fn commandify(value: String) -> Result<Command, Error> {
     let lines = value.trim().split("\n").map(String::from).collect::<Vec<_>>();
 
@@ -238,10 +281,10 @@ pub fn commandify(value: String) -> Result<Command, Error> {
         Cmd,
     }
 
-    let mut state = SpecState::Cd;
-
     let mut env = HashMap::<String, String>::new();
     let mut cd = None;
+
+    let mut state = SpecState::Cd;
     let mut command_lines = vec![];
     for raw_line in lines {
         let mut line = shlex::split(&raw_line).unwrap_or(vec![]);
@@ -284,20 +327,27 @@ pub fn commandify(value: String) -> Result<Command, Error> {
         bail!("Didn't find a command in your command! macro.");
     }
 
-    // Join the command string.
+    // Join the command string and split out binary / args.
     let command_string = command_lines.join("\n").replace("\\\n", "\n");
     let mut command = shlex::split(&command_string).expect("Command string couldn't be parsed by shlex");
-    let mut cmd = Command::new(command.remove(0)); 
-    cmd.args(command);
-    for (key, value) in env {
-        cmd.env(key, value);
-    }
-    if let Some(cd) = cd {
-        cmd.current_dir(cd);
-    }
+    let binary = command.remove(0); 
+    let args = command;
 
-    Ok(cmd)
+    // Generate the CommandSpec struct.
+    let spec = CommandSpec {
+        binary,
+        args,
+        env,
+        cd,
+    };
+
+    // DEBUG
+    // eprintln!("COMMAND: {:?}", spec);
+
+    Ok(spec.to_command())
 }
+
+//---------------
 
 #[macro_export]
 macro_rules! command {
