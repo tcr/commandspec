@@ -6,7 +6,6 @@ extern crate libc;
 extern crate lazy_static;
 extern crate ctrlc;
 
-use failure::Error;
 use std::process::{Command, Child};
 use std::fmt;
 use std::collections::HashMap;
@@ -16,6 +15,11 @@ use std::os::unix::process::CommandExt;
 use std::collections::HashSet;
 use std::sync::Arc;
 use std::sync::Mutex;
+
+// Re-export for macros.
+pub use failure::Error;
+
+pub mod macros;
 
 lazy_static! {
     static ref PID_MAP: Arc<Mutex<HashSet<i32>>> = Arc::new(Mutex::new(HashSet::new()));
@@ -83,6 +87,17 @@ pub enum CommandError {
 
     #[fail(display = "Command failed with error code {}.", _0)]
     Code(i32),
+}
+
+impl CommandError {
+    /// Returns the error code this command failed with. Can panic if not a `Code`.
+    pub fn error_code(&self) -> i32 {
+        if let CommandError::Code(value) = *self {
+            value
+        } else {
+            panic!("Called error_code on a value that was not a CommandError::Code")
+        }
+    }
 }
 
 impl CommandSpecExt for Command {
@@ -345,71 +360,4 @@ pub fn commandify(value: String) -> Result<Command, Error> {
     // eprintln!("COMMAND: {:?}", spec);
 
     Ok(spec.to_command())
-}
-
-//---------------
-
-#[macro_export]
-macro_rules! command {
-    ($fmt:expr) => ({
-        $crate::commandify(format!($fmt))
-    });
-    ($fmt:expr ,*) => ({
-        $crate::commandify(format!($fmt))
-    });
-    ($fmt:expr, $( $id:ident = $value:expr ,)*) => ({
-        $crate::commandify(
-            format!($fmt, $( $id = $crate::command_arg(&$value) ,)*)
-        )
-    });
-}
-
-
-#[macro_export]
-macro_rules! execute {
-    ($fmt:expr) => ({
-        $crate::commandify(format!($fmt))?.execute()
-    });
-    ($fmt:expr ,*) => ({
-        $crate::commandify(format!($fmt))?.execute()
-    });
-    ($fmt:expr, $( $id:ident = $value:expr ,)*) => ({
-        $crate::commandify(
-            format!($fmt, $( $id = $crate::command_arg(&$value) ,)*)
-        )?.execute()
-    });
-}
-
-#[macro_export]
-macro_rules! shell_sh {
-    ($fmt:expr) => ({
-        $crate::commandify(
-            format!(
-                "sh -c {}",
-                $crate::command_arg(
-                    &format!("set -e\n\n{}", format!($fmt)),
-                ),
-            )
-        )?.execute()
-    });
-    ($fmt:expr ,*) => ({
-        $crate::commandify(
-            format!(
-                "sh -c {}",
-                $crate::command_arg(
-                    &format!("set -e\n\n{}", format!($fmt)),
-                ),
-            )
-        )?.execute()
-    });
-    ($fmt:expr, $( $id:ident = $value:expr ,)*) => ({
-        $crate::commandify(
-            format!(
-                "sh -c {}",
-                $crate::command_arg(
-                    &format!("set -e\n\n{}", format!($fmt, $( $id = $crate::command_arg(&$value) ,)*)),
-                ),
-            )
-        )?.execute()
-    });
 }
