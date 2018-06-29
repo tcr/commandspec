@@ -1,30 +1,35 @@
 extern crate shlex;
 #[macro_use]
 extern crate failure;
-extern crate libc;
 #[macro_use]
 extern crate lazy_static;
 extern crate ctrlc;
+#[cfg(not(windows))]
+extern crate libc;
 
 use std::process::{Command, Child};
 use std::fmt;
 use std::collections::HashMap;
-use libc::{kill, SIGINT, setpgid};
-use std::os::unix::process::CommandExt;
-
 use std::collections::HashSet;
 use std::sync::Arc;
 use std::sync::Mutex;
+
+#[cfg(not(windows))]
+use std::os::unix::process::CommandExt;
+#[cfg(not(windows))]
+use libc::{kill, SIGINT, setpgid};
 
 // Re-export for macros.
 pub use failure::Error;
 
 pub mod macros;
 
+#[cfg(not(windows))]
 lazy_static! {
     static ref PID_MAP: Arc<Mutex<HashSet<i32>>> = Arc::new(Mutex::new(HashSet::new()));
 }
 
+#[cfg(not(windows))]
 pub fn cleanup_on_ctrlc() {
     ctrlc::set_handler(|| {
         for pid in PID_MAP.lock().unwrap().iter() {
@@ -36,12 +41,24 @@ pub fn cleanup_on_ctrlc() {
     }).expect("Error setting Ctrl-C handler");
 }
 
+#[cfg(windows)]
+pub fn cleanup_on_ctrlc() {
+    // TODO this is a no-op until job control is implemented.
+    // See https://github.com/rust-lang/cargo/blob/master/src/cargo/util/job.rs
+}
+
 pub struct SpawnGuard(pub Child);
 
 impl SpawnGuard {
+    #[cfg(not(windows))]
     fn abandon(self) {
         let id = self.0.id() as i32;
         PID_MAP.lock().unwrap().remove(&id);
+        ::std::mem::forget(self);
+    }
+
+    #[cfg(windows)]
+    fn abandon(self) {
         ::std::mem::forget(self);
     }
 }
@@ -60,6 +77,7 @@ impl ::std::ops::DerefMut for SpawnGuard {
     }
 }
 
+#[cfg(not(windows))]
 impl ::std::ops::Drop for SpawnGuard {
     fn drop(&mut self) {
         unsafe {
@@ -69,6 +87,14 @@ impl ::std::ops::Drop for SpawnGuard {
         }
     }
 }
+
+#[cfg(windows)]
+impl ::std::ops::Drop for SpawnGuard {
+    fn drop(&mut self) {
+        self.kill();
+    }
+}
+
 //---------------
 
 pub trait CommandSpecExt {
@@ -128,6 +154,7 @@ impl CommandSpecExt for Command {
         }
     }
 
+    #[cfg(not(windows))]
     fn scoped_spawn(&mut self) -> Result<SpawnGuard, ::std::io::Error> {
         let child = self.before_exec(|| {
             unsafe {
@@ -141,6 +168,12 @@ impl CommandSpecExt for Command {
         PID_MAP.lock().unwrap().insert(child.id() as i32);
 
         Ok(SpawnGuard(child))
+    }
+
+    #[cfg(windows)]
+    fn scoped_spawn(&mut self) -> Result<SpawnGuard, ::std::io::Error> {
+        // TODO enable job control on this to kill it?
+        Ok(SpawnGuard(self.spawn()?))
     }
 }
 
