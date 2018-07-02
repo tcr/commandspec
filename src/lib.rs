@@ -13,6 +13,7 @@ use std::collections::HashMap;
 use std::collections::HashSet;
 use std::sync::Arc;
 use std::sync::Mutex;
+use std::path::{Path, PathBuf};
 
 #[cfg(not(windows))]
 use std::os::unix::process::CommandExt;
@@ -105,7 +106,7 @@ pub trait CommandSpecExt {
 
 #[derive(Debug, Fail)]
 pub enum CommandError {
-    #[fail(display = "Encountered an IO error.")]
+    #[fail(display = "Encountered an IO error: {:?}", _0)]
     Io(#[cause] ::std::io::Error),
 
     #[fail(display = "Command was interrupted.")]
@@ -305,16 +306,52 @@ struct CommandSpec {
 
 impl CommandSpec {
     fn to_command(&self) -> Command {
-        let mut cmd = Command::new(&self.binary);
+        let mut cd = if let Some(ref cd) = self.cd {
+            canonicalize_path(Path::new(cd)).unwrap()
+        } else {
+            ::std::env::current_dir().unwrap()
+        };
+        let mut binary = Path::new(&self.binary).to_owned();
+
+        // On Windows, current_dir takes place after binary name resolution.
+        // If current_dir is specified and the binary is referenced by a relative path,
+        // add the dir change to its relative path.
+        // https://github.com/rust-lang/rust/issues/37868
+        if cfg!(windows) && binary.is_relative() && binary.components().count() != 1 {
+            binary = cd.join(&binary);
+        }
+
+        let mut cmd = Command::new(binary);
+        cmd.current_dir(cd);
         cmd.args(&self.args);
         for (key, value) in &self.env {
             cmd.env(key, value);
         }
-        if let Some(cd) = &self.cd {
-            cmd.current_dir(cd);
-        }
         cmd
     }
+}
+
+// Strips UNC from canonicalized paths.
+// See https://github.com/rust-lang/rust/issues/42869 for why this is needed.
+#[cfg(windows)]
+fn canonicalize_path<'p, P>(path: P) -> Result<PathBuf, Error>
+where P: Into<&'p Path> {
+    use std::ffi::OsString;
+    use std::os::windows::prelude::*;
+
+    let canonical = path.into().canonicalize()?;
+    let vec_chars = canonical.as_os_str().encode_wide().collect::<Vec<u16>>();
+    if vec_chars[0..4] == [92, 92, 63, 92] {
+        return Ok(Path::new(&OsString::from_wide(&vec_chars[4..])).to_owned());
+    }
+
+    Ok(canonical)
+}
+
+#[cfg(not(windows))]
+fn canonicalize_path<'p, P>(path: P) -> Result<PathBuf, Error>
+where P: Into<&'p Path> {
+    Ok(path.into().canonicalize()?)
 }
 
 //---------------

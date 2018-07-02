@@ -4,7 +4,7 @@ description = "Simple Rust macro for building `std::process::Command` objects. U
 license = "MIT OR Apache-2.0"
 name = "commandspec"
 repository = "http://github.com/tcr/commandspec"
-version = "0.9.0"
+version = "0.10.0"
 
 [dependencies]
 ctrlc = "3.1.0"
