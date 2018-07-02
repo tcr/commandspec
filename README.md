@@ -4,7 +4,7 @@ Simple Rust macro for building `std::process::Command` objects. Uses macro_rules
 
 ```toml
 [dependencies]
-commandspec = "0.3.0"
+commandspec = "0.10"
 ```
 
 Then:
@@ -16,7 +16,7 @@ extern crate commandspec;
 use commandspec::CommandSpec; // .execute() method on Command
 use std::process::Command;
 
-execute!(
+let result = execute!(
     r"
         cd path/location
         export RUST_LOG=full
@@ -26,7 +26,8 @@ execute!(
     release_flag=Some("--release"),
     bin_name="binary",
     args=vec!["arg1", "arg2"],
-)?; // () on success (error code 0), CommandError for all else
+)?;
+// result = Ok(()) on success (error code 0), Err(CommandError) for all else
 ```
 
 Format of the commandspec input, in order:
