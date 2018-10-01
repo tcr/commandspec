@@ -321,6 +321,19 @@ impl CommandSpec {
             binary = cd.join(&binary);
         }
 
+        // On windows, we run in cmd.exe by default. (This code is a naive way
+        // of accomplishing this and may contain errors.)
+        if cfg!(windows) {
+            let mut cmd = Command::new("cmd");
+            cmd.current_dir(cd);
+            let invoke_string = format!("{} {}", binary.as_path().to_string_lossy(), self.args.join(" "));
+            cmd.args(&["/C", &invoke_string]);
+            for (key, value) in &self.env {
+                cmd.env(key, value);
+            }
+            return cmd;
+        }
+
         let mut cmd = Command::new(binary);
         cmd.current_dir(cd);
         cmd.args(&self.args);
