@@ -4,7 +4,7 @@ description = "Rust macro to build std::process::Command objects with shell synt
 license = "MIT OR Apache-2.0"
 name = "commandspec"
 repository = "http://github.com/tcr/commandspec"
-version = "0.12.0"
+version = "0.12.1"
 
 [dependencies]
 failure = "0.1.1"

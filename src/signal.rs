@@ -88,7 +88,7 @@ pub fn uninstall_handler() {
     use nix::unistd::Pid;
 
     // Interrupt self to interrupt handler.
-    kill(Pid::this(), Signal::SIGHUP);
+    kill(Pid::this(), Signal::SIGUSR2);
 }
 
 #[cfg(unix)]
