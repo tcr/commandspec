@@ -3,105 +3,79 @@ extern crate shlex;
 extern crate failure;
 #[macro_use]
 extern crate lazy_static;
-extern crate ctrlc;
-#[cfg(not(windows))]
-extern crate libc;
+#[macro_use]
+extern crate log;
 
-use std::process::{Command, Child};
+#[cfg(windows)]
+extern crate kernel32;
+#[cfg(unix)]
+extern crate nix;
+#[cfg(windows)]
+extern crate winapi;
+
+use std::process::Command;
 use std::fmt;
 use std::collections::HashMap;
-use std::collections::HashSet;
 use std::sync::Arc;
 use std::sync::Mutex;
 use std::path::{Path, PathBuf};
-
-#[cfg(not(windows))]
-use std::os::unix::process::CommandExt;
-#[cfg(not(windows))]
-use libc::{kill, SIGINT, setpgid};
 
 // Re-export for macros.
 pub use failure::Error;
 
 pub mod macros;
+mod process;
+mod signal;
 
-#[cfg(not(windows))]
+use process::Process;
+use signal::Signal;
+
 lazy_static! {
-    static ref PID_MAP: Arc<Mutex<HashSet<i32>>> = Arc::new(Mutex::new(HashSet::new()));
+    static ref PID_MAP: Arc<Mutex<HashMap<i32, Process>>> = Arc::new(Mutex::new(HashMap::new()));
 }
 
-#[cfg(not(windows))]
+pub fn disable_cleanup_on_ctrlc() {
+    signal::uninstall_handler();
+}
+
 pub fn cleanup_on_ctrlc() {
-    ctrlc::set_handler(|| {
-        for pid in PID_MAP.lock().unwrap().iter() {
-            unsafe {
-                let _ = kill(-(*pid), SIGINT);
+    signal::install_handler(move |sig: Signal| {
+        match sig {
+            // SIGCHLD is special, initiate reap()
+            Signal::SIGCHLD => {
+                for (_pid, process) in PID_MAP.lock().unwrap().iter() {
+                    process.reap();
+                }
+            }
+            Signal::SIGINT => {
+                for (_pid, process) in PID_MAP.lock().unwrap().iter() {
+                    process.signal(sig);
+                }
+                ::std::process::exit(130);
+            }
+            _ => {
+                for (_pid, process) in PID_MAP.lock().unwrap().iter() {
+                    process.signal(sig);
+                }
             }
         }
-        ::std::process::exit(130);
-    }).expect("Error setting Ctrl-C handler");
+    });
 }
 
-#[cfg(windows)]
-pub fn cleanup_on_ctrlc() {
-    // TODO this is a no-op until job control is implemented.
-    // See https://github.com/rust-lang/cargo/blob/master/src/cargo/util/job.rs
-}
+pub struct SpawnGuard(i32);
 
-pub struct SpawnGuard(pub Child);
-
-impl SpawnGuard {
-    #[cfg(not(windows))]
-    fn abandon(self) {
-        let id = self.0.id() as i32;
-        PID_MAP.lock().unwrap().remove(&id);
-        ::std::mem::forget(self);
-    }
-
-    #[cfg(windows)]
-    fn abandon(self) {
-        ::std::mem::forget(self);
-    }
-}
-
-impl ::std::ops::Deref for SpawnGuard {
-    type Target = Child;
-
-    fn deref(&self) -> &Child {
-        &self.0
-    }
-}
-
-impl ::std::ops::DerefMut for SpawnGuard {
-    fn deref_mut(&mut self) -> &mut Child {
-        &mut self.0
-    }
-}
-
-#[cfg(not(windows))]
 impl ::std::ops::Drop for SpawnGuard {
     fn drop(&mut self) {
-        unsafe {
-            let id = self.0.id() as i32;
-            let _ = kill(-id, SIGINT);
-            PID_MAP.lock().unwrap().remove(&id);
-        }
-    }
-}
-
-#[cfg(windows)]
-impl ::std::ops::Drop for SpawnGuard {
-    fn drop(&mut self) {
-        self.kill();
+        PID_MAP.lock().unwrap().remove(&self.0).map(|process| process.reap());
     }
 }
 
 //---------------
 
 pub trait CommandSpecExt {
-    fn execute(&mut self) -> Result<(), CommandError>;
+    fn execute(self) -> Result<(), CommandError>;
 
-    fn scoped_spawn(&mut self) -> Result<SpawnGuard, ::std::io::Error>;
+    fn scoped_spawn(self) -> Result<SpawnGuard, ::std::io::Error>;
 }
 
 #[derive(Debug, Fail)]
@@ -129,8 +103,8 @@ impl CommandError {
 
 impl CommandSpecExt for Command {
     // Executes the command, and returns a versatile error struct
-    fn execute(&mut self) -> Result<(), CommandError> {
-        match self.scoped_spawn() {
+    fn execute(mut self) -> Result<(), CommandError> {
+        match self.spawn() {
             Ok(mut child) => {
                 match child.wait() {
                     Ok(status) => {
@@ -141,8 +115,6 @@ impl CommandSpecExt for Command {
                         } else {
                             Err(CommandError::Interrupt)
                         };
-
-                        child.abandon();
 
                         ret
                     }
@@ -155,26 +127,11 @@ impl CommandSpecExt for Command {
         }
     }
 
-    #[cfg(not(windows))]
-    fn scoped_spawn(&mut self) -> Result<SpawnGuard, ::std::io::Error> {
-        let child = self.before_exec(|| {
-            unsafe {
-                // Become this process' own leader.
-                let _ = setpgid(0, 0);
-            }
-            Ok(())
-        }).spawn()?;
-
-        // TODO only add to PID_MAP if successful at becoming a process leader
-        PID_MAP.lock().unwrap().insert(child.id() as i32);
-
-        Ok(SpawnGuard(child))
-    }
-
-    #[cfg(windows)]
-    fn scoped_spawn(&mut self) -> Result<SpawnGuard, ::std::io::Error> {
-        // TODO enable job control on this to kill it?
-        Ok(SpawnGuard(self.spawn()?))
+    fn scoped_spawn(self) -> Result<SpawnGuard, ::std::io::Error> {
+        let process = Process::new(self)?;
+        let id = process.id();
+        PID_MAP.lock().unwrap().insert(id, process);
+        Ok(SpawnGuard(id))
     }
 }
 
@@ -306,7 +263,7 @@ struct CommandSpec {
 
 impl CommandSpec {
     fn to_command(&self) -> Command {
-        let mut cd = if let Some(ref cd) = self.cd {
+        let cd = if let Some(ref cd) = self.cd {
             canonicalize_path(Path::new(cd)).unwrap()
         } else {
             ::std::env::current_dir().unwrap()
