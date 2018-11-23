@@ -19,6 +19,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use std::sync::Mutex;
 use std::path::{Path, PathBuf};
+use std::process::Stdio;
 
 // Re-export for macros.
 pub use failure::Error;
@@ -102,25 +103,18 @@ impl CommandError {
 }
 
 impl CommandSpecExt for Command {
-    // Executes the command, and returns a versatile error struct
+    // Executes the command, and returns a comprehensive error type
     fn execute(mut self) -> Result<(), CommandError> {
-        match self.spawn() {
-            Ok(mut child) => {
-                match child.wait() {
-                    Ok(status) => {
-                        let ret = if status.success() {
-                            Ok(())
-                        } else if let Some(code) = status.code() {
-                            Err(CommandError::Code(code))
-                        } else {
-                            Err(CommandError::Interrupt)
-                        };
-
-                        ret
-                    }
-                    Err(err) => {
-                        Err(CommandError::Io(err))
-                    }
+        self.stdout(Stdio::inherit());
+        self.stderr(Stdio::inherit());
+        match self.output() {
+            Ok(output) => {
+                if output.status.success() {
+                    Ok(())
+                } else if let Some(code) = output.status.code() {
+                    Err(CommandError::Code(code))
+                } else {
+                    Err(CommandError::Interrupt)
                 }
             },
             Err(err) => Err(CommandError::Io(err)),
